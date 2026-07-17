@@ -1,0 +1,19 @@
+{
+    "debug": true,
+    "server": {
+        "host": "",
+        "port": ""
+    },
+    "mediaSource": {
+        "media": "media",
+        "log": "log"
+    },
+    "dataSource": {
+        "engine": "PostgreSql",
+        "user": "",
+        "password": "",
+        "host": "",
+        "port": "",
+        "database": ""
+    }
+}

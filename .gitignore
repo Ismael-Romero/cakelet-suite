@@ -1,0 +1,29 @@
+/docs/Cakelet Suite/.obsidian/workspace.json
+/docs/Cakelet Suite/.obsidian/graph.json
+/docs/Cakelet Suite/.obsidian/sync/
+/docs/Cakelet Suite/.obsidian/cache/
+/docs/Cakelet Suite/.obsidian/plugins/*/data.json
+
+bin/
+dist/
+out/
+
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.out
+*.prof
+*.test
+coverage.html
+
+.idea
+.vscode/
+.DS_Store
+Thumbs.db
+
+config.json
+settings.json
+media
+logs
