@@ -2,18 +2,18 @@
     "debug": true,
     "server": {
         "host": "",
-        "port": ""
+        "port": 0
     },
     "mediaSource": {
-        "media": "media",
-        "log": "log"
+        "dirMedia": "media",
+        "dirLogs": "log"
     },
-    "dataSource": {
+    "database": {
         "engine": "PostgreSql",
         "user": "",
         "password": "",
         "host": "",
-        "port": "",
+        "port": 0,
         "database": ""
     }
 }
