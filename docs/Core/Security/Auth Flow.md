@@ -65,6 +65,62 @@ created with a maximum lifetime of three minutes. Rather than establishing a ses
 the server returns this temporary token and requests completion of the second
 authentication factor.
 
+
+###  Successful Authentication (Without 2FA)
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Client / Frontend
+    participant API as Auth Endpoint
+    participant Service as Auth Service
+    participant DB as Database / Persistence
+
+    Note over Client, DB: Scenario: Successful Authentication (Without 2FA)
+    Client->>API: POST /auth/login (username, password)
+    API->>Service: ValidateCredentials(username, password)
+    
+    Service->>DB: Query User Record By Username
+    DB-->>Service: User Data (Found & Active)
+    
+    Service->>Service: Verify Password Hash (Valid)
+    Service->>Service: Evaluate 2FA Status (Disabled)
+    
+    Service->>DB: Reset Failed Attempts Counter to 0 & Log Success
+    Service->>Service: Generate Access Token (1h) & Refresh Token (1h 10m)
+    
+    Service-->>API: Return Session Tokens & Profile Data
+    API-->>Client: HTTP 200 OK { access_token, refresh_token, user }
+```
+
+###  Initial Authentication (With 2FA Enabled)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Client as Client / Frontend
+  participant API as Auth Endpoint
+  participant Service as Auth Service
+  participant DB as Database / Persistence
+
+  Note over Client, DB: Scenario: Login Process (2FA Required)
+  Client->>API: POST /auth/login (username, password)
+  API->>Service: ValidateCredentials(username, password)
+
+  Service->>DB: Query User Record By Username
+  DB-->>Service: User Data (Found & Active)
+
+  Service->>Service: Verify Password Hash (Valid)
+  Service->>Service: Evaluate 2FA Status (Enabled)
+
+  Service->>Service: Generate Secure OTP & Extract its Hash
+  Service->>Service: Embed OTP Hash into Signed Transition JWT (3 min TTL)
+  Service->>Client: Send Verification Code via Email
+
+  Service-->>API: Return Transition Token (MFA Required)
+  API-->>Client: HTTP 202 Accepted { mfa_token, state: "2fa_required" }
+```
+
+
 ---
 
 # Two-Factor Authentication Flow
@@ -89,6 +145,30 @@ recorded and the failed-attempt counter being incremented. Once the configured t
 is reached, the account becomes locked. The client receives an error describing whether
 the verification code was invalid or whether the authentication session expired.
 
+
+``` mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Client / Frontend
+    participant API as 2FA Endpoint
+    participant Service as Auth Service
+    participant DB as Database / Persistence
+
+    Note over Client, DB: Scenario: Successful Two-Factor Authentication (2FA)
+    Client->>API: POST /auth/mfa/verify (mfa_token, code)
+    API->>Service: VerifyMFAChallenge(mfa_token, code)
+    
+    Service->>Service: Verify JWT Signature & Expiration (< 3 min)
+    Service->>Service: Extract OTP Hash from JWT Payload
+    Service->>Service: Compare Submitted Code Hash against Embedded Hash (Match)
+    
+    Service->>DB: Reset Failed Attempts Counter to 0 & Log Success
+    Service->>Service: Generate Access Token (1h) & Refresh Token (1h 10m)
+    
+    Service-->>API: Return Session Tokens & Profile Data
+    API-->>Client: HTTP 200 OK { access_token, refresh_token, user }
+```
+
 ---
 
 # Security Considerations
@@ -104,3 +184,5 @@ the attack surface of the platform.
 - Temporary Transition Tokens have a short lifetime and are cryptographically signed.
 - Definitive session tokens are issued only after every authentication requirement has
   been successfully satisfied.
+
+
