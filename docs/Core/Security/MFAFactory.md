@@ -7,33 +7,33 @@
 
 # 1. Introduction & Responsibility
 
-The `MFAFactory` is a core security component responsible for generating and validating
-Multi-Factor Authentication (MFA) challenges within the authentication subsystem.
+The `MFAFactory` is a security component responsible for generating and validating
+Multi-Factor Authentication (MFA) verification challenges.
 
-Its primary responsibility is to provide a secure mechanism for creating temporary
-verification challenges and validating user-provided verification codes before allowing
-the establishment of an authenticated session.
+Its primary responsibility is to provide the cryptographic operations required to
+protect one-time verification codes during an MFA authentication workflow.
 
-The component abstracts the cryptographic operations required by the MFA workflow,
-including:
+The component is responsible for:
 
-- Secure one-time code generation.
-- Verification code hashing.
-- Challenge validation.
-- Protection against replay and unauthorized verification attempts.
+- Generating cryptographically secure OTP values.
+- Protecting OTP values through secure hashing.
+- Validating user-provided OTP values against protected representations.
+- Providing expiration metadata associated with generated challenges.
 
 The `MFAFactory` does not manage:
 
 - User accounts.
-- Authentication sessions.
+- Authentication flows.
 - Email delivery.
-- Token lifecycle.
+- Token generation.
+- Token validation.
 - Persistence operations.
-- Authorization decisions.
+- MFA enrollment.
+- Session creation.
 
-Its responsibility is limited to the cryptographic processing of MFA challenges.
+The component only handles the cryptographic lifecycle of MFA challenges.
 
-The architectural boundary can be summarized as follows:
+The architectural boundary can be summarized as:
 
 ```text
 Authentication Service
@@ -44,25 +44,25 @@ Authentication Service
           |
           |
           v
- Secure MFA Challenge Validation
+ Secure MFA Challenge Processing
 ```
 
-The component completes its responsibility once the MFA challenge has been generated
-or validated.
+The responsibility of the component ends once the challenge has been generated or
+validated.
 
 ---
 
 # 2. Design & Architecture
 
-The `MFAFactory` follows the same security architecture principles used throughout the
-authentication subsystem.
+The `MFAFactory` follows the security subsystem architectural principles:
 
-The component is designed to be:
+- Stateless operation.
+- Cryptographic isolation.
+- Dependency injection.
+- Independent testability.
+- Separation from authentication workflows.
 
-- Stateless.
-- Cryptographically isolated.
-- Independently testable.
-- Decoupled from authentication workflows.
+The component does not persist generated challenges or maintain MFA state.
 
 ---
 
@@ -70,114 +70,142 @@ The component is designed to be:
 
 The component exposes the `MFAFactory` interface as its public contract.
 
-This abstraction provides:
-
-- Separation between MFA logic and authentication services.
-- Easier unit testing through mocks.
-- Ability to replace the underlying MFA implementation without affecting consumers.
-
 Example:
 
 ```go
 type MFAFactory interface {
-    GenerateChallenge() (*MFAChallenge, error)
-    ValidateChallenge(code string, challengeHash string) (bool, error)
+    GenerateChallenge() (string, *MFAChallenge, error)
+
+    ValidateChallenge(
+        code string,
+        challengeHash string,
+    ) (bool, error)
 }
 ```
 
-Authentication services depend on the interface instead of the concrete implementation.
+Higher-level authentication services depend on the interface rather than the concrete
+implementation.
+
+This provides:
+
+- Easier unit testing.
+- Reduced coupling.
+- Ability to replace the underlying MFA implementation.
 
 ---
 
 # 2.2 Dependency Injection
 
-The component is designed to integrate with Uber Fx through constructor injection.
+The component integrates with Uber Fx through constructor-based dependency injection.
 
-Example:
+The constructor receives application configuration:
 
 ```go
-type MFAFactoryParams struct {
-    fx.In
-
-    Config Config
-}
+func NewMFAFactory(cfg *config.Config) MFAFactory
 ```
 
-Injected configuration may include:
+The security module registers the component through:
+
+```go
+var Module = fx.Options(
+    fx.Provide(
+        factory.NewPasswordFactory,
+        factory.NewTokenFactory,
+        factory.NewMFAFactory,
+    ),
+)
+```
+
+The component receives only configuration required for:
 
 - OTP length.
-- Hashing configuration.
-- Challenge expiration policy.
-- Random generator configuration.
+- Challenge expiration.
+- Hashing parameters.
 
-The component must never receive user information or persistence dependencies.
+The `MFAFactory` does not receive:
+
+- User repositories.
+- Authentication services.
+- Email services.
+- Token services.
 
 ---
 
 # 3. MFA Challenge Architecture
 
-The MFA workflow uses short-lived verification challenges instead of persistent OTP
+The MFA workflow uses temporary cryptographic challenges instead of persistent OTP
 storage.
 
-The generated verification code is never stored or transmitted in plaintext by the
-backend.
+The plaintext OTP is only available during challenge generation.
 
-The challenge lifecycle follows:
+The protected representation contains:
+
+- OTP hash.
+- Expiration metadata.
+
+The general lifecycle:
 
 ```text
-Generate OTP
-      |
-      |
-      v
-Hash OTP
-      |
-      |
-      v
-Embed Hash into Temporary Token
-      |
-      |
-      v
-User submits OTP
-      |
-      |
-      v
-Compare Generated Hash
+Generate Secure OTP
+          |
+          v
+Generate OTP Hash
+          |
+          v
+Return Plain OTP + Protected Challenge
+          |
+          v
+Authentication Layer Protects Challenge Data
+          |
+          v
+User Submits OTP
+          |
+          v
+Validate OTP Against Hash
 ```
 
-This approach prevents exposure of active MFA codes through:
-
-- Database leaks.
-- Logs.
-- Debug traces.
-- Unauthorized persistence access.
+The `MFAFactory` does not know where the challenge representation is transported or
+stored.
 
 ---
 
 # 4. MFA Challenge Structure
 
-The MFA challenge contains the information required to validate a second factor.
-
-Example:
+The generated challenge is represented by:
 
 ```go
 type MFAChallenge struct {
-    CodeHash string
+    CodeHash  string
     ExpiresAt time.Time
 }
 ```
 
-The plaintext verification code exists only during generation and delivery.
+## CodeHash
 
-The stored representation contains only:
+Contains the BCrypt representation of the generated OTP.
 
-- Hashed verification code.
-- Expiration metadata.
+Example:
+
+```text
+$2b$12$8s91...
+```
+
+The plaintext OTP is never stored.
+
+---
+
+## ExpiresAt
+
+Defines the maximum validity period assigned to the generated challenge.
+
+Expiration enforcement belongs to the component responsible for transporting the
+challenge state, such as a temporary authentication token.
 
 ---
 
 # 5. Public API
 
-The `MFAFactory` exposes two main operations:
+The `MFAFactory` exposes two operations:
 
 - Challenge generation.
 - Challenge validation.
@@ -189,53 +217,40 @@ The `MFAFactory` exposes two main operations:
 ## Signature
 
 ```go
-GenerateChallenge() (*MFAChallenge, error)
+GenerateChallenge() (
+    string,
+    *MFAChallenge,
+    error,
+)
 ```
 
 ## Description
 
-Generates a cryptographically secure one-time verification challenge.
+Generates a secure one-time verification challenge.
 
 The operation performs:
 
-1. Generate a random numeric verification code.
-2. Hash the generated code.
-3. Create the MFA challenge representation.
-4. Return the plaintext code for delivery and the protected hash representation.
+1. Generate a cryptographically secure numeric OTP.
+2. Generate a BCrypt hash representation.
+3. Create the MFA challenge metadata.
+4. Return the plaintext OTP for delivery and the protected challenge.
 
 Example:
 
-```text
 Generated OTP:
 
+```text
 482913
+```
 
+Protected representation:
 
-Stored Representation:
-
+```text
 $2b$12$8s91...
 ```
 
----
-
-## Security Requirements
-
-The generated code must:
-
-- Use a cryptographically secure random generator.
-- Have sufficient entropy.
-- Never be predictable.
-- Never be reused.
-
-Example policy:
-
-```text
-OTP Length:
-6 digits
-
-Lifetime:
-3 minutes
-```
+The plaintext code must only be used by the authentication workflow responsible for
+delivery.
 
 ---
 
@@ -246,38 +261,38 @@ Lifetime:
 ```go
 ValidateChallenge(
     code string,
-    challengeHash string
+    challengeHash string,
 ) (bool, error)
 ```
 
 ## Description
 
-Validates whether a user-provided MFA code matches the previously generated challenge.
+Validates whether a submitted MFA code matches the previously generated challenge
+hash.
 
 The operation performs:
 
-1. Receive the user-provided code.
-2. Apply the same hashing strategy.
-3. Compare the generated hash against the stored challenge hash.
-4. Return the validation result.
+1. Receives the submitted OTP.
+2. Compares it against the BCrypt challenge hash.
+3. Returns the validation result.
 
 ---
 
 ## Output
 
-Successful validation:
+Valid OTP:
 
 ```text
 true
 ```
 
-Invalid verification code:
+Invalid OTP:
 
 ```text
 false
 ```
 
-Internal processing failures:
+Internal validation failures:
 
 ```text
 error
@@ -287,17 +302,18 @@ error
 
 # 6. Authentication Flow Integration
 
-The `MFAFactory` is invoked during the authentication process only after the primary
-credentials have been validated.
+The `MFAFactory` is invoked after primary credential validation.
 
-It participates in two stages:
+The authentication workflow remains responsible for:
 
-1. MFA challenge generation.
-2. MFA challenge validation.
+- Determining whether MFA is required.
+- Sending the OTP.
+- Protecting challenge metadata.
+- Creating authenticated sessions.
 
 ---
 
-# 6.1 MFA Challenge Generation Flow
+## 6.1 Challenge Generation Flow
 
 ```mermaid
 sequenceDiagram
@@ -309,29 +325,23 @@ sequenceDiagram
     participant Email as Email Service
     participant Client
 
-    Note over Auth,Client: MFA Challenge Creation
-
     Auth->>MFA: GenerateChallenge()
 
     MFA->>MFA: Generate Secure OTP
-    MFA->>MFA: Generate OTP Hash
+    MFA->>MFA: Generate BCrypt Hash
 
-    MFA-->>Auth: Return OTP and Hash
+    MFA-->>Auth: OTP + MFAChallenge
 
-    Auth->>Token: Generate Temporary Transition Token
+    Auth->>Token: Create Temporary MFA Token
 
-    Note over Token: Token contains user_id, OTP hash, and expiration time (<= 3 minutes)
-
-    Token-->>Auth: Return MFA Transition Token
-
-    Auth->>Email: Send OTP Code
+    Auth->>Email: Send OTP
 
     Auth-->>Client: Return MFA Token
 ```
 
 ---
 
-# 6.2 MFA Verification Flow
+## 6.2 Challenge Verification Flow
 
 ```mermaid
 sequenceDiagram
@@ -342,28 +352,23 @@ sequenceDiagram
     participant Token as TokenFactory
     participant MFA as MFAFactory
 
-    Note over Client,MFA: MFA Verification
-
     Client->>Auth: Submit MFA Token + OTP Code
 
     Auth->>Token: Validate Temporary Token
 
-    Token-->>Auth: Valid Claims
+    Token-->>Auth: Valid Token Data
 
     Auth->>MFA: ValidateChallenge(code, hash)
-
-    MFA->>MFA: Hash Submitted Code
-    MFA->>MFA: Compare Hashes
 
     MFA-->>Auth: Validation Result
 
     alt Valid Code
 
-        Auth->>Auth: Continue Session Creation
+        Auth->>Auth: Continue Authentication
 
     else Invalid Code
 
-        Auth->>Auth: Register Failed Attempt
+        Auth->>Auth: Register Authentication Failure
 
     end
 ```
@@ -378,101 +383,70 @@ Verification codes must:
 
 - Never be stored in plaintext.
 - Never appear in logs.
-- Never be returned through API responses.
-- Never be reused.
-- Have a limited lifetime.
+- Never be returned by APIs.
+- Be generated using cryptographically secure randomness.
 
 ---
 
-## 7.2 Replay Protection
+## 7.2 Secure Random Generation
 
-Each MFA challenge must be:
-
-- Short-lived.
-- Associated with a single authentication attempt.
-- Invalid after successful verification.
-
-A previously consumed challenge must not allow session creation.
-
----
-
-## 7.3 Secure Random Generation
-
-OTP values must be generated using cryptographically secure randomness.
+OTP generation uses cryptographic randomness.
 
 The implementation must not use:
 
-- Pseudo-random generators.
-- Predictable sequences.
+- Predictable random generators.
+- Sequential values.
 - Timestamp-based generation.
 
 ---
 
-## 7.4 Timing Attack Resistance
+## 7.3 Hash Protection
 
-Verification comparisons must use constant-time comparison mechanisms whenever possible.
+OTP hashes must:
 
-The implementation must avoid exposing information about:
+- Use a secure password hashing algorithm.
+- Include automatic salt generation.
+- Prevent recovery of the original OTP value.
 
-- Hash length.
-- Matching characters.
-- Partial validation results.
+---
+
+## 7.4 Stateless Operation
+
+The `MFAFactory`:
+
+- Does not persist challenges.
+- Does not store OTP values.
+- Does not track verification attempts.
+- Does not manage MFA sessions.
+
+State management belongs to higher-level authentication components.
 
 ---
 
 # 8. Error Handling
 
-Errors generated by the `MFAFactory` follow the security module convention:
+Errors generated by `MFAFactory` follow:
 
 ```text
 security/factory:
 ```
 
----
-
-## Error Definitions
-
 | Error | Description |
 |---|---|
-| `ErrInvalidChallenge` | Returned when the MFA challenge cannot be validated. |
-| `ErrExpiredChallenge` | Returned when the challenge exceeds its validity period. |
-| `ErrCodeMismatch` | Returned when the provided code does not match the generated challenge. |
+| `ErrInvalidChallenge` | Returned when challenge validation cannot be processed. |
+| `ErrCodeMismatch` | Returned when the provided code does not match. |
 | `ErrChallengeGeneration` | Returned when secure OTP generation fails. |
-| `ErrHashGeneration` | Returned when the OTP hash operation fails. |
+| `ErrHashGeneration` | Returned when OTP hashing fails. |
 
 ---
 
-# 9. Uber Fx Integration
+# 9. Design Principles Summary
 
-The component is registered within the security module.
+The `MFAFactory` follows these principles:
 
-Example:
-
-```go
-// security/module.go
-
-var Module = fx.Options(
-    fx.Provide(
-        factory.NewPasswordFactory,
-        factory.NewTokenFactory,
-        factory.NewMFAFactory,
-    ),
-)
-```
-
-Once registered, authentication services can receive the `MFAFactory` dependency
-through constructor injection.
-
----
-
-# 10. Design Principles Summary
-
-The `MFAFactory` follows these architectural principles:
-
-- **Single Responsibility:** Handles MFA challenge generation and validation only.
-- **Stateless Operation:** Does not persist MFA state or user information.
-- **Cryptographic Isolation:** Encapsulates OTP protection mechanisms.
-- **Secure Challenge Lifecycle:** Uses short-lived verification challenges.
-- **Replay Resistance:** Prevents reuse of previously issued MFA codes.
-- **Authentication Separation:** Does not create sessions or manage user identity.
-- **Testability:** Provides an interface-based abstraction suitable for isolated testing.
+- **Single Responsibility:** Handles MFA cryptographic operations only.
+- **Stateless Design:** Does not persist MFA state.
+- **Cryptographic Isolation:** Encapsulates OTP generation and validation.
+- **Secure Challenge Handling:** Protects OTP values using hashing.
+- **Workflow Independence:** Does not manage authentication decisions.
+- **Testability:** Provides an interface-based abstraction.
