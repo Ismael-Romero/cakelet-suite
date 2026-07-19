@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"github.com/Ismael-Romero/cakelet-suite/config"
 )
 
-func Setup(cfg *Config) {
+func Setup(cfg *config.Config) {
 
 	var err error
 

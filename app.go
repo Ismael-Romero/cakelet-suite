@@ -1,11 +1,14 @@
 package main
 
-import "go.uber.org/fx"
+import (
+	"github.com/Ismael-Romero/cakelet-suite/config"
+	"go.uber.org/fx"
+)
 
 func main() {
 	app := fx.New(
-		fx.Provide(NewConfig),
-		fx.Invoke(TestConfig),
+		fx.Provide(config.NewConfig),
+		fx.Invoke(config.TestConfig),
 		fx.Invoke(Setup),
 	)
 	app.Run()
